@@ -51,7 +51,7 @@ Está diseñada para **administradores de sistemas, desarrolladores y equipos De
 
 ```bash
 # Clonar el repositorio
-git clone https://github.com/<tu-usuario>/DigitalCertificateTool.git
+git clone https://github.com/xabier2012/DigitalCertificateTool.git
 cd DigitalCertificateTool
 
 # Instalar dependencias
