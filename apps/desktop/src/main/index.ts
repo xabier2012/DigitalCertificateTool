@@ -77,7 +77,9 @@ function createWindow(): void {
     mainWindow?.show();
   });
 
-  if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
+  const useDevServer = (process.env.NODE_ENV === 'development' || !app.isPackaged) && !process.env.ELECTRON_IS_E2E;
+
+  if (useDevServer) {
     // Try multiple ports in case 5173 is in use
     const tryPorts = [5173, 5174, 5175, 5176, 5177, 5178, 5179, 5180];
     const loadDevServer = async () => {
@@ -156,14 +158,84 @@ function setupIpcHandlers(): void {
   });
 
   ipcMain.handle('openssl:test', async (_event, opensslPath: string) => {
-    const tempService = new OpenSSLService(opensslPath);
-    const result = await tempService.checkAvailable();
-    addLogEntry({
-      type: 'test_openssl',
-      status: result.success ? 'success' : 'error',
-      errorMessage: result.error?.message,
-    });
-    return result;
+    try {
+      const tempService = new OpenSSLService(opensslPath);
+      const result = await tempService.checkAvailable();
+      addLogEntry({
+        type: 'test_openssl',
+        status: result.success ? 'success' : 'error',
+        errorMessage: result.error?.message,
+      });
+      return result;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      addLogEntry({
+        type: 'test_openssl',
+        status: 'error',
+        errorMessage: message,
+      });
+      return {
+        success: false,
+        error: {
+          code: 'OPENSSL_TEST_FAILED',
+          message: `Error al probar OpenSSL: ${message}`,
+          technicalDetails: message,
+        },
+      };
+    }
+  });
+
+  ipcMain.handle('openssl:findInDirectory', async (_event, dirPath: string) => {
+    const fs = await import('fs');
+    const p = await import('path');
+    const candidates = [
+      p.join(dirPath, 'openssl.exe'),
+      p.join(dirPath, 'bin', 'openssl.exe'),
+      p.join(dirPath, 'openssl'),
+      p.join(dirPath, 'bin', 'openssl'),
+    ];
+    for (const candidate of candidates) {
+      try {
+        const stat = fs.statSync(candidate);
+        if (stat.isFile()) {
+          return { success: true, data: candidate };
+        }
+      } catch {
+        // not found, try next
+      }
+    }
+    // Recursive search as last resort (max depth 3)
+    const search = (dir: string, depth: number): string | null => {
+      if (depth > 3) return null;
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isFile() && (entry.name === 'openssl.exe' || entry.name === 'openssl')) {
+            return p.join(dir, entry.name);
+          }
+        }
+        for (const entry of entries) {
+          if (entry.isDirectory() && !entry.name.startsWith('.')) {
+            const found = search(p.join(dir, entry.name), depth + 1);
+            if (found) return found;
+          }
+        }
+      } catch {
+        // permission error, skip
+      }
+      return null;
+    };
+    const found = search(dirPath, 0);
+    if (found) {
+      return { success: true, data: found };
+    }
+    return {
+      success: false,
+      error: {
+        code: 'OPENSSL_NOT_FOUND',
+        message: `No se encontró openssl.exe en la carpeta seleccionada ni en sus subcarpetas.`,
+      },
+    };
   });
 
   ipcMain.handle('openssl:inspect', async (_event, filePath: string, password?: string) => {
@@ -193,6 +265,17 @@ function setupIpcHandlers(): void {
       store.set('recentFiles', filtered.slice(0, 10));
     }
 
+    return result;
+  });
+
+  ipcMain.handle('openssl:inspectCSR', async (_event, filePath: string) => {
+    const result = await opensslService.inspectCSR(filePath);
+    addLogEntry({
+      type: 'inspect_csr',
+      inputFileName: path.basename(filePath),
+      status: result.success ? 'success' : 'error',
+      errorMessage: result.error?.message,
+    });
     return result;
   });
 

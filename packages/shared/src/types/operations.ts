@@ -1,5 +1,6 @@
 export type OperationType =
   | 'inspect'
+  | 'inspect_csr'
   | 'convert'
   | 'extract_public_key'
   | 'generate_csr'

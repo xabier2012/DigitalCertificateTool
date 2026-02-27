@@ -81,14 +81,22 @@ export default function Templates() {
   }, []);
 
   const loadTemplates = async () => {
-    const saved = localStorage.getItem('cert-manager-templates');
-    const custom: CertificateTemplate[] = saved ? JSON.parse(saved) : [];
-    setTemplates([...BUILT_IN_TEMPLATES, ...custom]);
+    try {
+      const settings = await window.electronAPI.settings.get();
+      const custom: CertificateTemplate[] = settings.customTemplates || [];
+      setTemplates([...BUILT_IN_TEMPLATES, ...custom]);
+    } catch {
+      setTemplates([...BUILT_IN_TEMPLATES]);
+    }
   };
 
-  const saveCustomTemplates = (allTemplates: CertificateTemplate[]) => {
+  const saveCustomTemplates = async (allTemplates: CertificateTemplate[]) => {
     const custom = allTemplates.filter(t => !t.isBuiltIn);
-    localStorage.setItem('cert-manager-templates', JSON.stringify(custom));
+    try {
+      await window.electronAPI.settings.set({ customTemplates: custom });
+    } catch {
+      // Silent fail - state already updated locally
+    }
   };
 
   const handleCreate = () => {

@@ -26,7 +26,7 @@ import {
   Folder as FolderIcon,
   Key as KeyIcon,
 } from '@mui/icons-material';
-import type { CertificateInfo } from '@cert-manager/shared';
+import type { CertificateInfo, CSRInfo } from '@cert-manager/shared';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -50,7 +50,9 @@ export default function InspectCertificate() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [certInfo, setCertInfo] = useState<CertificateInfo | null>(null);
+  const [csrInfo, setCsrInfo] = useState<CSRInfo | null>(null);
   const [isPKCS12, setIsPKCS12] = useState(false);
+  const [isCSR, setIsCSR] = useState(false);
   const [tabValue, setTabValue] = useState(0);
   const [extractDialogOpen, setExtractDialogOpen] = useState(false);
   const [extractPath, setExtractPath] = useState('');
@@ -58,23 +60,32 @@ export default function InspectCertificate() {
   useEffect(() => {
     const state = location.state as { filePath?: string } | null;
     if (state?.filePath) {
+      const ext = state.filePath.toLowerCase();
+      const p12 = ext.endsWith('.p12') || ext.endsWith('.pfx');
+      const csr = ext.endsWith('.csr');
       setFilePath(state.filePath);
-      handleAnalyze(state.filePath);
+      setIsPKCS12(p12);
+      setIsCSR(csr);
+      if (!p12) {
+        handleAnalyze(state.filePath);
+      }
     }
   }, [location.state]);
 
   const handleSelectFile = async () => {
     const result = await window.electronAPI.dialog.selectFile([
-      { name: 'Certificados', extensions: ['cer', 'crt', 'pem', 'der', 'p12', 'pfx', 'key'] },
+      { name: 'Certificados y CSR', extensions: ['cer', 'crt', 'pem', 'der', 'p12', 'pfx', 'key', 'csr'] },
       { name: 'Todos los archivos', extensions: ['*'] },
     ]);
     if (result.success && result.data) {
       setFilePath(result.data);
       setCertInfo(null);
+      setCsrInfo(null);
       setError(null);
 
       const ext = result.data.toLowerCase();
       setIsPKCS12(ext.endsWith('.p12') || ext.endsWith('.pfx'));
+      setIsCSR(ext.endsWith('.csr'));
     }
   };
 
@@ -88,14 +99,36 @@ export default function InspectCertificate() {
     setLoading(true);
     setError(null);
     setCertInfo(null);
+    setCsrInfo(null);
 
     try {
-      const result = await window.electronAPI.openssl.inspect(targetPath, password || undefined);
-      if (result.success && result.data) {
-        setCertInfo(result.data);
-        setPassword('');
+      const ext = targetPath.toLowerCase();
+      if (ext.endsWith('.csr') || isCSR) {
+        const result = await window.electronAPI.openssl.inspectCSR(targetPath);
+        if (result.success && result.data) {
+          setCsrInfo(result.data);
+        } else {
+          setError(result.error?.message || 'Error al analizar el CSR');
+        }
       } else {
-        setError(result.error?.message || 'Error al analizar el certificado');
+        const targetExt = targetPath.toLowerCase();
+        const needsPassword = targetExt.endsWith('.p12') || targetExt.endsWith('.pfx');
+        const result = await window.electronAPI.openssl.inspect(targetPath, needsPassword ? (password || undefined) : undefined);
+        if (result.success && result.data) {
+          setCertInfo(result.data);
+          setPassword('');
+        } else {
+          if (result.error?.message?.includes('CSR') || result.error?.technicalDetails?.includes('Certificate Signing Request')) {
+            const csrResult = await window.electronAPI.openssl.inspectCSR(targetPath);
+            if (csrResult.success && csrResult.data) {
+              setCsrInfo(csrResult.data);
+            } else {
+              setError(result.error?.message || 'Error al analizar el certificado');
+            }
+          } else {
+            setError(result.error?.message || 'Error al analizar el certificado');
+          }
+        }
       }
     } finally {
       setLoading(false);
@@ -150,7 +183,7 @@ export default function InspectCertificate() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
+      <Typography variant="h4" gutterBottom data-testid="page-title">
         Inspeccionar Certificado
       </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
@@ -164,7 +197,7 @@ export default function InspectCertificate() {
             label="Archivo de certificado"
             value={filePath}
             onChange={(e) => setFilePath(e.target.value)}
-            placeholder="Selecciona un archivo .cer, .crt, .pem, .p12, .pfx..."
+            placeholder="Selecciona un archivo .cer, .crt, .pem, .p12, .pfx, .csr..."
           />
           <Button variant="outlined" onClick={handleSelectFile} startIcon={<FolderIcon />}>
             Seleccionar
@@ -193,6 +226,78 @@ export default function InspectCertificate() {
 
         {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
       </Paper>
+
+      {csrInfo && (
+        <Paper sx={{ p: 0 }}>
+          <Box sx={{ p: 2, bgcolor: 'info.main', color: 'info.contrastText' }}>
+            <Typography variant="subtitle1" fontWeight={600}>Solicitud de Certificado (CSR)</Typography>
+          </Box>
+          <Box sx={{ p: 3 }}>
+            <Grid container spacing={3}>
+              <Grid item xs={12} md={6}>
+                <Typography variant="h6" gutterBottom>Subject</Typography>
+                <InfoRow label="CN (Common Name)" value={csrInfo.subject.CN || ''} copyable />
+                <InfoRow label="O (Organization)" value={csrInfo.subject.O || ''} />
+                <InfoRow label="OU (Org. Unit)" value={csrInfo.subject.OU || ''} />
+                <InfoRow label="L (Locality)" value={csrInfo.subject.L || ''} />
+                <InfoRow label="ST (State)" value={csrInfo.subject.ST || ''} />
+                <InfoRow label="C (Country)" value={csrInfo.subject.C || ''} />
+                <InfoRow label="Full DN" value={csrInfo.subject.raw} copyable />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <Typography variant="h6" gutterBottom>Detalles técnicos</Typography>
+                <InfoRow label="Algoritmo" value={csrInfo.algorithm} />
+                <InfoRow label="Tamaño clave" value={csrInfo.keySize ? `${csrInfo.keySize} bits` : 'N/A'} />
+                <InfoRow label="Es CA" value={csrInfo.isCA ? 'Sí' : 'No'} />
+              </Grid>
+              {csrInfo.keyUsage.length > 0 && (
+                <Grid item xs={12} md={6}>
+                  <Typography variant="h6" gutterBottom>Key Usage</Typography>
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                    {csrInfo.keyUsage.map((usage, i) => (
+                      <Chip key={i} label={usage} size="small" variant="outlined" />
+                    ))}
+                  </Box>
+                </Grid>
+              )}
+              {csrInfo.extendedKeyUsage.length > 0 && (
+                <Grid item xs={12} md={6}>
+                  <Typography variant="h6" gutterBottom>Extended Key Usage</Typography>
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                    {csrInfo.extendedKeyUsage.map((eku, i) => (
+                      <Chip key={i} label={eku} size="small" variant="outlined" />
+                    ))}
+                  </Box>
+                </Grid>
+              )}
+              {csrInfo.subjectAltNames.length > 0 && (
+                <Grid item xs={12}>
+                  <Typography variant="h6" gutterBottom>Subject Alternative Names (SAN)</Typography>
+                  <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                    {csrInfo.subjectAltNames.map((san, i) => (
+                      <Chip key={i} label={`${san.type}: ${san.value}`} size="small" variant="outlined" />
+                    ))}
+                  </Box>
+                </Grid>
+              )}
+              <Grid item xs={12}>
+                <Divider sx={{ my: 1 }} />
+                <Typography variant="h6" gutterBottom>Texto completo</Typography>
+                <TextField
+                  fullWidth
+                  multiline
+                  rows={15}
+                  value={csrInfo.rawText}
+                  InputProps={{
+                    readOnly: true,
+                    sx: { fontFamily: 'monospace', fontSize: '12px' },
+                  }}
+                />
+              </Grid>
+            </Grid>
+          </Box>
+        </Paper>
+      )}
 
       {certInfo && (
         <Paper sx={{ p: 0 }}>

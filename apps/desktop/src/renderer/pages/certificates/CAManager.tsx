@@ -32,10 +32,9 @@ import {
   AccountTree as IntermediateIcon,
   Add as AddIcon,
   Delete as DeleteIcon,
-  FileUpload as ImportIcon,
   CheckCircle as SuccessIcon,
 } from '@mui/icons-material';
-import type { LocalCAInfo, KeyAlgorithm, SignatureHash, SubjectDN } from '@cert-manager/shared';
+import type { LocalCAInfo, KeyAlgorithm, SubjectDN } from '@cert-manager/shared';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -94,10 +93,12 @@ export default function CAManager() {
     loadDefaults();
   }, []);
 
-  const loadLocalCAs = () => {
-    const saved = localStorage.getItem('cert-manager-local-cas');
-    if (saved) {
-      setLocalCAs(JSON.parse(saved));
+  const loadLocalCAs = async () => {
+    try {
+      const settings = await window.electronAPI.settings.get();
+      setLocalCAs(settings.localCAs || []);
+    } catch {
+      setLocalCAs([]);
     }
   };
 
@@ -107,9 +108,13 @@ export default function CAManager() {
     setIntOutputDir(dir);
   };
 
-  const saveLocalCAs = (cas: LocalCAInfo[]) => {
-    localStorage.setItem('cert-manager-local-cas', JSON.stringify(cas));
+  const saveLocalCAs = async (cas: LocalCAInfo[]) => {
     setLocalCAs(cas);
+    try {
+      await window.electronAPI.settings.set({ localCAs: cas });
+    } catch {
+      // Silent fail - state already updated locally
+    }
   };
 
   const handleSelectDirectory = async (setter: (path: string) => void) => {
@@ -278,7 +283,6 @@ export default function CAManager() {
   };
 
   const rootCAs = localCAs.filter(ca => ca.type === 'root');
-  const intermediateCAs = localCAs.filter(ca => ca.type === 'intermediate');
 
   return (
     <Box>

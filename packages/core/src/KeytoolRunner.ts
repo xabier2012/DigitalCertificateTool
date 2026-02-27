@@ -22,6 +22,7 @@ const PASSWORD_PROMPTS = [
   /Enter destination keystore password:\s*$/i,
   /Re-enter new password:\s*$/i,
   /Enter key password for .+:\s*$/i,
+  /same as keystore password\):\s*$/i,
   /Enter the password again:\s*$/i,
   /New keystore password:\s*$/i,
   /Keystore password:\s*$/i,
@@ -139,7 +140,7 @@ export class KeytoolRunner {
               passwordToSend = passwords.srcStorePass || passwords.storePass || '';
             } else if (/destination keystore password/i.test(currentBuffer)) {
               passwordToSend = passwords.destStorePass || passwords.storePass || '';
-            } else if (/key password for/i.test(currentBuffer)) {
+            } else if (/key password for/i.test(currentBuffer) || /same as keystore password/i.test(currentBuffer)) {
               passwordToSend = passwords.keyPass || passwords.storePass || '';
             } else if (/Re-enter|again/i.test(currentBuffer)) {
               passwordToSend = passwords.storePass || '';

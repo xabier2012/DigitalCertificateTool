@@ -12,6 +12,7 @@ import type {
   ConversionOptions,
   OperationResult,
   KeyAlgorithm,
+  KeyUsageFlags,
 } from '@cert-manager/shared';
 import { ERROR_CODES, ERROR_MESSAGES } from '@cert-manager/shared';
 
@@ -32,6 +33,7 @@ export class OpenSSLService {
 
   setOpensslPath(newPath: string): void {
     this.opensslPath = newPath;
+    this._opensslModulesDir = undefined;
   }
 
   async checkAvailable(): Promise<OperationResult<string>> {
@@ -45,6 +47,29 @@ export class OpenSSLService {
       };
     }
 
+    try {
+      const stat = fs.statSync(this.opensslPath);
+      if (!stat.isFile()) {
+        return {
+          success: false,
+          error: {
+            code: ERROR_CODES.OPENSSL_EXECUTION_FAILED,
+            message: `La ruta "${this.opensslPath}" no es un archivo ejecutable. Es un directorio. Selecciona el archivo openssl.exe dentro de la carpeta (normalmente en bin/).`,
+            technicalDetails: `Path is a directory, not an executable file`,
+          },
+        };
+      }
+    } catch {
+      return {
+        success: false,
+        error: {
+          code: ERROR_CODES.OPENSSL_EXECUTION_FAILED,
+          message: `No se encontró el archivo "${this.opensslPath}". Verifica que la ruta sea correcta.`,
+          technicalDetails: `File not found: ${this.opensslPath}`,
+        },
+      };
+    }
+
     const result = await this.commandRunner.execute(this.opensslPath, ['version']);
 
     if (!result.success) {
@@ -52,7 +77,7 @@ export class OpenSSLService {
         success: false,
         error: {
           code: ERROR_CODES.OPENSSL_EXECUTION_FAILED,
-          message: ERROR_MESSAGES.OPENSSL_EXECUTION_FAILED,
+          message: `No se pudo ejecutar OpenSSL. Verifica que el archivo sea un ejecutable válido de OpenSSL.`,
           technicalDetails: result.error || result.stderr,
         },
       };
@@ -100,6 +125,54 @@ export class OpenSSLService {
     }
 
     return result;
+  }
+
+  async inspectCSR(
+    filePath: string
+  ): Promise<OperationResult<import('@cert-manager/shared').CSRInfo>> {
+    const checkResult = await this.checkAvailable();
+    if (!checkResult.success) return { success: false, error: checkResult.error };
+
+    if (!fs.existsSync(filePath)) {
+      return {
+        success: false,
+        error: {
+          code: ERROR_CODES.FILE_NOT_FOUND,
+          message: ERROR_MESSAGES.FILE_NOT_FOUND,
+        },
+      };
+    }
+
+    const args = ['req', '-in', filePath, '-noout', '-text'];
+    const result = await this.commandRunner.execute(this.opensslPath, args);
+
+    if (!result.success) {
+      return {
+        success: false,
+        error: {
+          code: ERROR_CODES.OPENSSL_EXECUTION_FAILED,
+          message: 'El archivo no es un CSR válido o está corrupto.',
+          technicalDetails: result.stderr,
+        },
+      };
+    }
+
+    const rawText = result.stdout;
+    const parsed = this.certParser.parseOpenSSLOutput(rawText);
+
+    return {
+      success: true,
+      data: {
+        subject: parsed.subject,
+        algorithm: parsed.algorithm,
+        keySize: parsed.keySize,
+        subjectAltNames: parsed.subjectAltNames,
+        keyUsage: parsed.keyUsage,
+        extendedKeyUsage: parsed.extendedKeyUsage,
+        isCA: parsed.isCA,
+        rawText,
+      },
+    };
   }
 
   private async inspectPEM(filePath: string): Promise<OperationResult<CertificateInfo>> {
@@ -197,28 +270,128 @@ export class OpenSSLService {
     };
   }
 
+  private isPKCS12PasswordError(stderr: string): boolean {
+    return stderr.includes('mac verify failure') || stderr.includes('invalid password');
+  }
+
+  private hasCertPEM(stdout: string): boolean {
+    return stdout.includes('-----BEGIN CERTIFICATE-----');
+  }
+
+  private _opensslModulesDir: string | null | undefined = undefined;
+
+  private findOpenSSLModulesDir(): string | null {
+    if (this._opensslModulesDir !== undefined) return this._opensslModulesDir;
+
+    const binDir = path.dirname(this.opensslPath);
+    const dllName = process.platform === 'win32' ? 'legacy.dll' : 'legacy.so';
+
+    const candidates = [
+      binDir,
+      path.join(binDir, '..', 'lib', 'ossl-modules'),
+      path.join(binDir, '..', 'lib64', 'ossl-modules'),
+      path.join(binDir, 'ossl-modules'),
+      path.join(binDir, '..', 'ossl-modules'),
+    ];
+
+    for (const dir of candidates) {
+      const resolved = path.resolve(dir);
+      if (fs.existsSync(path.join(resolved, dllName))) {
+        console.log(`[OpenSSL] Found legacy module at: ${resolved}`);
+        this._opensslModulesDir = resolved;
+        return resolved;
+      }
+    }
+
+    console.log(`[OpenSSL] Legacy module not found in any candidate path`);
+    this._opensslModulesDir = null;
+    return null;
+  }
+
+  private async tryPKCS12Extract(
+    filePath: string,
+    password: string
+  ): Promise<import('@cert-manager/shared').CommandResult | null> {
+    const baseEnv: Record<string, string> = { CERT_P12_PASS: password };
+
+    const modulesDir = this.findOpenSSLModulesDir();
+    const legacyEnv: Record<string, string> = { ...baseEnv };
+    if (modulesDir) {
+      legacyEnv['OPENSSL_MODULES'] = modulesDir;
+    }
+
+    const strategies: Array<{ label: string; args: string[]; opts: { env?: Record<string, string> } }> = [
+      {
+        label: 'env + clcerts',
+        args: ['pkcs12', '-in', filePath, '-nokeys', '-clcerts', '-passin', 'env:CERT_P12_PASS'],
+        opts: { env: baseEnv },
+      },
+      {
+        label: 'env + clcerts + legacy',
+        args: ['pkcs12', '-legacy', '-in', filePath, '-nokeys', '-clcerts', '-passin', 'env:CERT_P12_PASS'],
+        opts: { env: legacyEnv },
+      },
+      {
+        label: 'env + nokeys + legacy',
+        args: ['pkcs12', '-legacy', '-in', filePath, '-nokeys', '-passin', 'env:CERT_P12_PASS'],
+        opts: { env: legacyEnv },
+      },
+      {
+        label: 'pass: + clcerts + legacy',
+        args: ['pkcs12', '-legacy', '-in', filePath, '-nokeys', '-clcerts', '-passin', `pass:${password}`],
+        opts: { env: modulesDir ? { OPENSSL_MODULES: modulesDir } : {} },
+      },
+    ];
+
+    for (const strategy of strategies) {
+      console.log(`[PKCS12 inspect] Trying strategy: ${strategy.label}`);
+      const result = await this.commandRunner.execute(this.opensslPath, strategy.args, strategy.opts);
+
+      if (this.hasCertPEM(result.stdout)) {
+        console.log(`[PKCS12 inspect] Strategy '${strategy.label}' succeeded (cert found in stdout, exitCode=${result.exitCode})`);
+        return { ...result, success: true };
+      }
+
+      if (this.isPKCS12PasswordError(result.stderr)) {
+        console.log(`[PKCS12 inspect] Strategy '${strategy.label}' → password error`);
+        return result;
+      }
+
+      console.log(`[PKCS12 inspect] Strategy '${strategy.label}' failed: exitCode=${result.exitCode}, stderr=${result.stderr.substring(0, 300)}`);
+    }
+
+    return null;
+  }
+
   private async inspectPKCS12(
     filePath: string,
     password?: string
   ): Promise<OperationResult<CertificateInfo>> {
     const pass = password || '';
-    const env: Record<string, string> = { CERT_P12_PASS: pass };
-    const args = ['pkcs12', '-in', filePath, '-nokeys', '-clcerts', '-passin', 'env:CERT_P12_PASS'];
-    const result = await this.commandRunner.execute(this.opensslPath, args, { env });
 
-    if (!result.success) {
-      if (
-        result.stderr.includes('mac verify failure') ||
-        result.stderr.includes('invalid password')
-      ) {
-        return {
-          success: false,
-          error: {
-            code: ERROR_CODES.INVALID_PASSWORD,
-            message: ERROR_MESSAGES.INVALID_PASSWORD,
-          },
-        };
-      }
+    const result = await this.tryPKCS12Extract(filePath, pass);
+
+    if (!result) {
+      return {
+        success: false,
+        error: {
+          code: ERROR_CODES.OPENSSL_EXECUTION_FAILED,
+          message: 'No se pudo extraer el certificado del archivo PKCS#12. Ninguna estrategia de extracción tuvo éxito. Verifica que el archivo no esté corrupto.',
+        },
+      };
+    }
+
+    if (this.isPKCS12PasswordError(result.stderr)) {
+      return {
+        success: false,
+        error: {
+          code: ERROR_CODES.INVALID_PASSWORD,
+          message: ERROR_MESSAGES.INVALID_PASSWORD,
+        },
+      };
+    }
+
+    if (!this.hasCertPEM(result.stdout)) {
       return {
         success: false,
         error: {
@@ -252,11 +425,9 @@ export class OpenSSLService {
       args1 = ['x509', '-inform', 'der', '-in', filePath, '-noout', '-fingerprint', '-sha1'];
     } else if (format === 'PKCS12') {
       const pass = password || '';
-      const fpEnv: Record<string, string> = { CERT_P12_PASS: pass };
-      const extractArgs = ['pkcs12', '-in', filePath, '-nokeys', '-clcerts', '-passin', 'env:CERT_P12_PASS'];
-      const extractResult = await this.commandRunner.execute(this.opensslPath, extractArgs, { env: fpEnv });
+      const extractResult = await this.tryPKCS12Extract(filePath, pass);
 
-      if (!extractResult.success) {
+      if (!extractResult || !this.hasCertPEM(extractResult.stdout)) {
         return { sha256: '', sha1: '' };
       }
 
@@ -470,10 +641,11 @@ export class OpenSSLService {
       );
       if (!keyResult.success) return { success: false, error: keyResult.error };
 
-      const configContent = this.generateOpenSSLConfig(options.subject, options.sanList);
+      const configContent = this.generateOpenSSLConfig(options.subject, options.sanList, options.keyUsage, options.extendedKeyUsage);
       await fs.promises.writeFile(configPath, configContent);
 
-      const args = ['req', '-new', '-key', keyPath, '-out', csrPath, '-config', configPath];
+      const mdFlag = `-${options.signatureHash?.toLowerCase().replace('-', '') || 'sha256'}`;
+      const args = ['req', '-new', '-key', keyPath, '-out', csrPath, '-config', configPath, mdFlag];
 
       const csrEnv: Record<string, string> = {};
       if (options.keyPassword) {
@@ -530,10 +702,10 @@ export class OpenSSLService {
       );
       if (!keyResult.success) return { success: false, error: keyResult.error };
 
-      const configContent = this.generateOpenSSLConfig(options.subject, options.sanList);
+      const configContent = this.generateOpenSSLConfig(options.subject, options.sanList, options.keyUsage, options.extendedKeyUsage, options.isCA, options.pathLenConstraint);
       await fs.promises.writeFile(configPath, configContent);
 
-      const hasSAN = options.sanList && options.sanList.length > 0;
+      const mdFlag = `-${options.signatureHash?.toLowerCase().replace('-', '') || 'sha256'}`;
       
       const args = [
         'req',
@@ -547,13 +719,10 @@ export class OpenSSLService {
         options.validityDays.toString(),
         '-config',
         configPath,
-        '-sha256',  // Explicitly use SHA256
+        mdFlag,
+        '-extensions',
+        'v3_req',
       ];
-
-      // CRITICAL: -extensions flag is required for v3 extensions to be included in cert
-      if (hasSAN) {
-        args.push('-extensions', 'v3_req');
-      }
 
       const selfSignEnv: Record<string, string> = {};
       if (options.keyPassword) {
@@ -585,11 +754,14 @@ export class OpenSSLService {
 
   private generateOpenSSLConfig(
     subject: CSRGenerationOptions['subject'],
-    sanList: CSRGenerationOptions['sanList']
+    sanList: CSRGenerationOptions['sanList'],
+    keyUsage?: KeyUsageFlags,
+    extendedKeyUsage?: string[],
+    isCA?: boolean,
+    pathLenConstraint?: number
   ): string {
     const hasSAN = sanList && sanList.length > 0;
 
-    // Always include x509_extensions for self-signed certs and req_extensions for CSRs
     let config = `[req]
 default_bits = 2048
 prompt = no
@@ -610,13 +782,29 @@ CN = ${this.escapeConfigValue(subject.CN)}
     if (subject.ST) config += `ST = ${this.escapeConfigValue(subject.ST)}\n`;
     if (subject.L) config += `L = ${this.escapeConfigValue(subject.L)}\n`;
     if (subject.emailAddress) config += `emailAddress = ${this.escapeConfigValue(subject.emailAddress)}\n`;
+    if (subject.serialNumber) config += `serialNumber = ${this.escapeConfigValue(subject.serialNumber)}\n`;
 
-    config += `
-[v3_req]
-basicConstraints = critical, CA:FALSE
-keyUsage = critical, digitalSignature, keyEncipherment
-extendedKeyUsage = serverAuth, clientAuth
-`;
+    config += `\n[v3_req]\n`;
+
+    if (isCA) {
+      const pathLen = pathLenConstraint !== undefined ? `, pathlen:${pathLenConstraint}` : '';
+      config += `basicConstraints = critical, CA:TRUE${pathLen}\n`;
+    } else {
+      config += `basicConstraints = critical, CA:FALSE\n`;
+    }
+
+    const kuFlags = keyUsage ? this.formatKeyUsage(keyUsage) : '';
+    if (kuFlags) {
+      config += `keyUsage = critical, ${kuFlags}\n`;
+    } else if (!keyUsage) {
+      config += `keyUsage = critical, digitalSignature, keyEncipherment\n`;
+    }
+
+    if (extendedKeyUsage && extendedKeyUsage.length > 0) {
+      config += `extendedKeyUsage = ${extendedKeyUsage.join(', ')}\n`;
+    } else if (!extendedKeyUsage) {
+      config += `extendedKeyUsage = serverAuth, clientAuth\n`;
+    }
 
     if (hasSAN) {
       config += `subjectAltName = @alt_names
@@ -648,6 +836,20 @@ extendedKeyUsage = serverAuth, clientAuth
     }
 
     return config;
+  }
+
+  private formatKeyUsage(ku: KeyUsageFlags): string {
+    const flags: string[] = [];
+    if (ku.digitalSignature) flags.push('digitalSignature');
+    if (ku.contentCommitment) flags.push('nonRepudiation');
+    if (ku.keyEncipherment) flags.push('keyEncipherment');
+    if (ku.dataEncipherment) flags.push('dataEncipherment');
+    if (ku.keyAgreement) flags.push('keyAgreement');
+    if (ku.keyCertSign) flags.push('keyCertSign');
+    if (ku.cRLSign) flags.push('cRLSign');
+    if (ku.encipherOnly) flags.push('encipherOnly');
+    if (ku.decipherOnly) flags.push('decipherOnly');
+    return flags.join(', ');
   }
 
   private escapeConfigValue(value: string): string {

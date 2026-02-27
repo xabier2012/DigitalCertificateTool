@@ -33,7 +33,6 @@ import {
   ExpandLess as CollapseIcon,
   Folder as FolderIcon,
   Add as AddIcon,
-  Delete as DeleteIcon,
   CheckCircle as SuccessIcon,
   Help as HelpIcon,
   Speed as QuickIcon,
@@ -144,9 +143,11 @@ export default function GenerateCertificate() {
   };
 
   const loadLocalCAs = async () => {
-    const saved = localStorage.getItem('cert-manager-local-cas');
-    if (saved) {
-      setLocalCAs(JSON.parse(saved));
+    try {
+      const settings = await window.electronAPI.settings.get();
+      setLocalCAs(settings.localCAs || []);
+    } catch {
+      setLocalCAs([]);
     }
   };
 
@@ -184,9 +185,48 @@ export default function GenerateCertificate() {
     }
   };
 
+  const validateSanValue = (type: string, value: string): string | null => {
+    const v = value.trim();
+    if (!v) return 'El valor no puede estar vacío.';
+
+    switch (type) {
+      case 'DNS': {
+        const dnsRegex = /^(\*\.)?([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z]{2,}$/;
+        if (!dnsRegex.test(v)) return 'DNS inválido. Ejemplo: www.example.com o *.example.com';
+        break;
+      }
+      case 'IP': {
+        const ipv4Regex = /^((25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(25[0-5]|2[0-4]\d|[01]?\d\d?)$/;
+        const ipv6Regex = /^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$/;
+        if (!ipv4Regex.test(v) && !ipv6Regex.test(v)) return 'IP inválida. Ejemplo: 192.168.1.1 o ::1';
+        break;
+      }
+      case 'email': {
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(v)) return 'Email inválido. Ejemplo: admin@example.com';
+        break;
+      }
+      case 'URI': {
+        try {
+          const url = new URL(v);
+          if (!url.protocol || !url.host) throw new Error();
+        } catch {
+          return 'URI inválida. Ejemplo: https://example.com';
+        }
+        break;
+      }
+    }
+    return null;
+  };
+
   const handleAddSan = () => {
-    if (!newSanValue.trim()) return;
-    setSanList([...sanList, { type: newSanType, value: newSanValue.trim() }]);
+    const validationError = validateSanValue(newSanType, newSanValue);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    setError(null);
+    setSanList([...sanList, { type: newSanType as any, value: newSanValue.trim() }]);
     setNewSanValue('');
   };
 
@@ -266,6 +306,9 @@ export default function GenerateCertificate() {
           algorithm,
           keyPassword: keyPassword || undefined,
           outputDir,
+          signatureHash,
+          keyUsage,
+          extendedKeyUsage: allEKU.length > 0 ? allEKU : undefined,
         });
 
         if (result.success && result.data) {
@@ -282,6 +325,11 @@ export default function GenerateCertificate() {
           keyPassword: keyPassword || undefined,
           outputDir,
           validityDays,
+          signatureHash,
+          keyUsage,
+          extendedKeyUsage: allEKU.length > 0 ? allEKU : undefined,
+          isCA,
+          pathLenConstraint,
         });
 
         if (result.success && result.data) {
@@ -303,6 +351,7 @@ export default function GenerateCertificate() {
           algorithm,
           keyPassword: keyPassword || undefined,
           outputDir,
+          signatureHash,
         });
 
         if (!csrResult.success || !csrResult.data) {
@@ -322,6 +371,8 @@ export default function GenerateCertificate() {
           keyUsage,
           extendedKeyUsage: allEKU,
           sanList,
+          signatureHash,
+          chainCertPath: ca.certPath,
         });
 
         if (signResult.success && signResult.data) {
@@ -359,6 +410,7 @@ export default function GenerateCertificate() {
           onChange={(e) => setCn(e.target.value)}
           placeholder={generationMode === 'self-signed' ? 'localhost' : 'ejemplo.com'}
           helperText="Nombre de dominio o nombre del titular"
+          data-testid="cn-input"
         />
       </Grid>
 
@@ -686,6 +738,7 @@ export default function GenerateCertificate() {
               onClick={handleGenerate}
               disabled={loading}
               startIcon={loading ? <CircularProgress size={20} /> : null}
+              data-testid="generate-btn"
             >
               {generationMode === 'csr-external' ? 'Generar CSR' : 'Generar Certificado'}
             </Button>
@@ -696,7 +749,7 @@ export default function GenerateCertificate() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>Generar Certificado</Typography>
+      <Typography variant="h4" gutterBottom data-testid="page-title">Generar Certificado</Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
         Wizard unificado para CSRs, certificados autofirmados y emisión con CA local
       </Typography>
@@ -711,9 +764,9 @@ export default function GenerateCertificate() {
         {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
 
         <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 3 }}>
-          <Button disabled={activeStep === 0} onClick={handleBack}>Atrás</Button>
+          <Button disabled={activeStep === 0} onClick={handleBack} data-testid="cert-back-btn">Atrás</Button>
           {activeStep < steps.length - 1 && (
-            <Button variant="contained" onClick={handleNext}>Siguiente</Button>
+            <Button variant="contained" onClick={handleNext} data-testid="cert-next-btn">Siguiente</Button>
           )}
         </Box>
       </Paper>

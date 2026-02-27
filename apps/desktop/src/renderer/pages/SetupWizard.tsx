@@ -197,7 +197,7 @@ export default function SetupWizard() {
         return (
           <Box sx={{ textAlign: 'center', py: 4 }}>
             <SecurityIcon sx={{ fontSize: 80, color: 'primary.main', mb: 2 }} />
-            <Typography variant="h4" gutterBottom>
+            <Typography variant="h4" gutterBottom data-testid="wizard-welcome-title">
               Bienvenido a Certificate Manager Tool
             </Typography>
             <Typography variant="body1" color="text.secondary" sx={{ maxWidth: 500, mx: 'auto', mt: 2 }}>
@@ -379,7 +379,7 @@ export default function SetupWizard() {
         return (
           <Box sx={{ textAlign: 'center', py: 4 }}>
             <CheckIcon sx={{ fontSize: 80, color: 'success.main', mb: 2 }} />
-            <Typography variant="h4" gutterBottom>
+            <Typography variant="h4" gutterBottom data-testid="wizard-completed-title">
               Configuración completada
             </Typography>
             <Typography variant="body1" color="text.secondary">
@@ -419,6 +419,7 @@ export default function SetupWizard() {
           <Button
             disabled={activeStep === 0}
             onClick={handleBack}
+            data-testid="wizard-back-btn"
           >
             Atrás
           </Button>
@@ -429,6 +430,7 @@ export default function SetupWizard() {
               onClick={handleFinish}
               disabled={loading}
               startIcon={loading ? <CircularProgress size={20} /> : null}
+              data-testid="wizard-finish-btn"
             >
               Finalizar
             </Button>
@@ -436,6 +438,7 @@ export default function SetupWizard() {
             <Button
               variant="contained"
               onClick={handleNext}
+              data-testid="wizard-next-btn"
             >
               {activeStep === 0 ? 'Empezar' : 'Siguiente'}
             </Button>

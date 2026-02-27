@@ -10,6 +10,7 @@ import type {
   PKCS12ExtractResult,
 } from '@cert-manager/shared';
 import { ERROR_CODES, ERROR_MESSAGES } from '@cert-manager/shared';
+import type { CommandResult } from '@cert-manager/shared';
 
 export class PKCS12Service {
   private opensslPath: string;
@@ -24,6 +25,97 @@ export class PKCS12Service {
 
   setOpensslPath(newPath: string): void {
     this.opensslPath = newPath;
+    this._opensslModulesDir = undefined;
+  }
+
+  private isPKCS12PasswordError(stderr: string): boolean {
+    return stderr.includes('mac verify failure') || stderr.includes('invalid password');
+  }
+
+  private hasPEMContent(stdout: string): boolean {
+    return stdout.includes('-----BEGIN ');
+  }
+
+  private _opensslModulesDir: string | null | undefined = undefined;
+
+  private findOpenSSLModulesDir(): string | null {
+    if (this._opensslModulesDir !== undefined) return this._opensslModulesDir;
+
+    const binDir = path.dirname(this.opensslPath);
+    const dllName = process.platform === 'win32' ? 'legacy.dll' : 'legacy.so';
+
+    const candidates = [
+      binDir,
+      path.join(binDir, '..', 'lib', 'ossl-modules'),
+      path.join(binDir, '..', 'lib64', 'ossl-modules'),
+      path.join(binDir, 'ossl-modules'),
+      path.join(binDir, '..', 'ossl-modules'),
+    ];
+
+    for (const dir of candidates) {
+      const resolved = path.resolve(dir);
+      if (fs.existsSync(path.join(resolved, dllName))) {
+        this._opensslModulesDir = resolved;
+        return resolved;
+      }
+    }
+
+    this._opensslModulesDir = null;
+    return null;
+  }
+
+  private getLegacyEnv(baseEnv?: Record<string, string>): Record<string, string> {
+    const env: Record<string, string> = { ...baseEnv };
+    const modulesDir = this.findOpenSSLModulesDir();
+    if (modulesDir) {
+      env['OPENSSL_MODULES'] = modulesDir;
+    }
+    return env;
+  }
+
+  private async executePKCS12Command(
+    args: string[],
+    options: { env?: Record<string, string> } = {}
+  ): Promise<CommandResult> {
+    const result = await this.commandRunner.execute(this.opensslPath, args, options);
+
+    if (result.success) return result;
+
+    if (this.hasPEMContent(result.stdout) && !this.isPKCS12PasswordError(result.stderr)) {
+      return { ...result, success: true };
+    }
+
+    if (!this.isPKCS12PasswordError(result.stderr)) {
+      const legacyArgs = [...args];
+      const pkcs12Idx = legacyArgs.indexOf('pkcs12');
+      if (pkcs12Idx !== -1) {
+        legacyArgs.splice(pkcs12Idx + 1, 0, '-legacy');
+      }
+      const legacyOpts = { env: this.getLegacyEnv(options.env) };
+      const legacyResult = await this.commandRunner.execute(this.opensslPath, legacyArgs, legacyOpts);
+      if (legacyResult.success || this.hasPEMContent(legacyResult.stdout)) {
+        return { ...legacyResult, success: true };
+      }
+
+      const passArgs = args.map(a => {
+        if (a === 'env:P12_PASS') return `pass:${options.env?.['P12_PASS'] || ''}`;
+        if (a === 'env:KEY_PASS_OUT') return `pass:${options.env?.['KEY_PASS_OUT'] || ''}`;
+        if (a === 'env:P12_PASS_OUT') return `pass:${options.env?.['P12_PASS_OUT'] || ''}`;
+        return a;
+      });
+      const passLegacyArgs = [...passArgs];
+      const pkcs12Idx2 = passLegacyArgs.indexOf('pkcs12');
+      if (pkcs12Idx2 !== -1) {
+        passLegacyArgs.splice(pkcs12Idx2 + 1, 0, '-legacy');
+      }
+      const passLegacyOpts = { env: this.getLegacyEnv() };
+      const passLegacyResult = await this.commandRunner.execute(this.opensslPath, passLegacyArgs, passLegacyOpts);
+      if (passLegacyResult.success || this.hasPEMContent(passLegacyResult.stdout)) {
+        return { ...passLegacyResult, success: true };
+      }
+    }
+
+    return result;
   }
 
   async createPKCS12(options: PKCS12CreateOptions): Promise<OperationResult<string>> {
@@ -134,11 +226,10 @@ export class PKCS12Service {
       '-noout',
     ];
 
-    const infoResult = await this.commandRunner.execute(this.opensslPath, infoArgs, { env });
+    const infoResult = await this.executePKCS12Command(infoArgs, { env });
 
     if (!infoResult.success) {
-      if (infoResult.stderr.includes('mac verify failure') || 
-          infoResult.stderr.includes('invalid password')) {
+      if (this.isPKCS12PasswordError(infoResult.stderr)) {
         return {
           success: false,
           error: {
@@ -164,7 +255,7 @@ export class PKCS12Service {
       '-nokeys',
     ];
 
-    const certResult = await this.commandRunner.execute(this.opensslPath, certArgs, { env });
+    const certResult = await this.executePKCS12Command(certArgs, { env });
     const hasCertificate = certResult.success && certResult.stdout.includes('-----BEGIN CERTIFICATE-----');
 
     const keyArgs = [
@@ -175,7 +266,7 @@ export class PKCS12Service {
       '-nocerts',
     ];
 
-    const keyResult = await this.commandRunner.execute(this.opensslPath, keyArgs, { env });
+    const keyResult = await this.executePKCS12Command(keyArgs, { env });
     const hasPrivateKey = keyResult.success && 
       (keyResult.stdout.includes('-----BEGIN PRIVATE KEY-----') ||
        keyResult.stdout.includes('-----BEGIN ENCRYPTED PRIVATE KEY-----') ||
@@ -189,7 +280,7 @@ export class PKCS12Service {
       '-cacerts',
     ];
 
-    const chainResult = await this.commandRunner.execute(this.opensslPath, chainArgs, { env });
+    const chainResult = await this.executePKCS12Command(chainArgs, { env });
     const chainCertCount = (chainResult.stdout.match(/-----BEGIN CERTIFICATE-----/g) || []).length;
     const hasChain = chainCertCount > 0;
 
@@ -207,7 +298,7 @@ export class PKCS12Service {
         '-clcerts',
       ];
 
-      const certDetailsResult = await this.commandRunner.execute(this.opensslPath, certDetailsArgs, { env });
+      const certDetailsResult = await this.executePKCS12Command(certDetailsArgs, { env });
       
       if (certDetailsResult.success) {
         const tempCert = await this.createTempFile('temp_cert.pem');
@@ -294,7 +385,7 @@ export class PKCS12Service {
         '-clcerts',
       ];
 
-      const certResult = await this.commandRunner.execute(this.opensslPath, certArgs, { env });
+      const certResult = await this.executePKCS12Command(certArgs, { env });
       
       if (certResult.success && certResult.stdout.includes('-----BEGIN CERTIFICATE-----')) {
         if (options.certFormat === 'DER') {
@@ -329,7 +420,7 @@ export class PKCS12Service {
         keyArgs.push('-nodes');
       }
 
-      const keyResult = await this.commandRunner.execute(this.opensslPath, keyArgs, { env });
+      const keyResult = await this.executePKCS12Command(keyArgs, { env });
       
       if (keyResult.success && 
           (keyResult.stdout.includes('-----BEGIN PRIVATE KEY-----') ||
@@ -351,7 +442,7 @@ export class PKCS12Service {
         '-cacerts',
       ];
 
-      const chainResult = await this.commandRunner.execute(this.opensslPath, chainArgs, { env });
+      const chainResult = await this.executePKCS12Command(chainArgs, { env });
       
       if (chainResult.success && chainResult.stdout.includes('-----BEGIN CERTIFICATE-----')) {
         await fs.promises.writeFile(chainPath, chainResult.stdout);

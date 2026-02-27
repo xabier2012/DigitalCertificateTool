@@ -53,6 +53,7 @@ const navItems: NavItem[] = [
       { text: 'Inspect', icon: <SearchIcon />, path: '/certificates/inspect' },
       { text: 'Convert / Export', icon: <ConvertIcon />, path: '/certificates/convert' },
       { text: 'PKCS#12 Manager', icon: <PKCS12Icon />, path: '/certificates/pkcs12' },
+      { text: 'PKCS#7 Manager', icon: <PKCS12Icon />, path: '/certificates/pkcs7' },
     ],
   },
   {
@@ -107,6 +108,7 @@ export default function MainLayout({ children }: MainLayoutProps) {
       <Box key={item.text}>
         <ListItem disablePadding>
           <ListItemButton
+            data-testid={`nav-${item.text.toLowerCase().replace(/[^a-z0-9]/g, '-')}`}
             onClick={() => {
               if (hasChildren) {
                 handleToggle(item.text);
@@ -149,7 +151,7 @@ export default function MainLayout({ children }: MainLayoutProps) {
           },
         }}
       >
-        <Toolbar sx={{ px: 2 }}>
+        <Toolbar sx={{ px: 2 }} data-testid="sidebar-header">
           <SecurityIcon sx={{ mr: 1, color: 'primary.main' }} />
           <Typography variant="h6" noWrap component="div" fontWeight={600}>
             Certificate Manager
@@ -162,6 +164,7 @@ export default function MainLayout({ children }: MainLayoutProps) {
       </Drawer>
       <Box
         component="main"
+        data-testid="main-content"
         sx={{
           flexGrow: 1,
           bgcolor: 'background.default',

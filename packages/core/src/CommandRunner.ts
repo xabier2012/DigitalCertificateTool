@@ -29,12 +29,25 @@ export class CommandRunner {
       let stderr = '';
       let killed = false;
 
-      const proc = spawn(command, args, {
-        cwd,
-        env: { ...process.env, ...env },
-        shell: false,
-        windowsHide: true,
-      });
+      let proc;
+      try {
+        proc = spawn(command, args, {
+          cwd,
+          env: { ...process.env, ...env },
+          shell: false,
+          windowsHide: true,
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        resolve({
+          success: false,
+          stdout: '',
+          stderr: '',
+          exitCode: null,
+          error: `No se pudo ejecutar el comando: ${message}`,
+        });
+        return;
+      }
 
       const timeoutId = setTimeout(() => {
         killed = true;

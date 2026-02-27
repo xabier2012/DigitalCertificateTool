@@ -6,6 +6,8 @@ export interface AppSettings {
   setupCompleted: boolean;
   recentFiles: RecentFile[];
   language: 'es' | 'en';
+  customTemplates: import('./templates').CertificateTemplate[];
+  localCAs: import('./ca').LocalCAInfo[];
 }
 
 export interface RecentFile {
@@ -34,6 +36,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   setupCompleted: false,
   recentFiles: [],
   language: 'es',
+  customTemplates: [],
+  localCAs: [],
 };
 
 export interface SecurityPreferences {

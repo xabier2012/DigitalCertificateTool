@@ -1,3 +1,5 @@
+import type { KeyUsageFlags, SignatureHash } from './templates';
+
 export interface CertificateInfo {
   subject: SubjectInfo;
   issuer: SubjectInfo;
@@ -54,6 +56,7 @@ export interface CSRGenerationOptions {
     O?: string;
     OU?: string;
     emailAddress?: string;
+    serialNumber?: string;
   };
   sanList: SubjectAltName[];
   algorithm: KeyAlgorithm;
@@ -61,11 +64,27 @@ export interface CSRGenerationOptions {
   outputDir: string;
   keyFileName?: string;
   csrFileName?: string;
+  signatureHash?: SignatureHash;
+  keyUsage?: KeyUsageFlags;
+  extendedKeyUsage?: string[];
 }
 
 export interface SelfSignedGenerationOptions extends CSRGenerationOptions {
   validityDays: number;
   certFileName?: string;
+  isCA?: boolean;
+  pathLenConstraint?: number;
+}
+
+export interface CSRInfo {
+  subject: SubjectInfo;
+  algorithm: string;
+  keySize: number;
+  subjectAltNames: SubjectAltName[];
+  keyUsage: string[];
+  extendedKeyUsage: string[];
+  isCA: boolean;
+  rawText: string;
 }
 
 export interface ConversionOptions {

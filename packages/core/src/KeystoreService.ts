@@ -54,9 +54,11 @@ export class KeystoreService {
       '-dname', 'CN=Temp,O=Temp,C=XX',
       '-keystore', keystorePath,
       '-storetype', type,
+      '-storepass', password,
+      '-keypass', password,
     ];
 
-    const result = await this.runner.runInteractive(args, { storePass: password });
+    const result = await this.runner.runDirect(args);
 
     if (!result.success) {
       return {
@@ -65,14 +67,17 @@ export class KeystoreService {
       };
     }
 
-    const deleteResult = await this.deleteAlias({
-      keystorePath,
-      keystorePassword: password,
-      alias: 'temp_init_alias',
-    });
+    const deleteArgs = [
+      '-delete',
+      '-alias', 'temp_init_alias',
+      '-keystore', keystorePath,
+      '-storepass', password,
+    ];
+
+    const deleteResult = await this.runner.runDirect(deleteArgs);
 
     if (!deleteResult.success) {
-      console.warn('[KeystoreService] No se pudo eliminar alias temporal:', deleteResult.error?.message);
+      console.warn('[KeystoreService] No se pudo eliminar alias temporal:', deleteResult.stderr);
     }
 
     return { success: true, data: keystorePath };

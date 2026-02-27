@@ -3,6 +3,7 @@ import type {
   AppSettings,
   OperationResult,
   CertificateInfo,
+  CSRInfo,
   CertificateDetectionResult,
   CSRGenerationOptions,
   SelfSignedGenerationOptions,
@@ -60,6 +61,8 @@ export interface ElectronAPI {
     generateSelfSigned: (
       options: SelfSignedGenerationOptions
     ) => Promise<OperationResult<{ keyPath: string; certPath: string }>>;
+    inspectCSR: (filePath: string) => Promise<OperationResult<CSRInfo>>;
+    findInDirectory: (dirPath: string) => Promise<OperationResult<string>>;
     detect: () => Promise<OperationResult<{ path: string; version: string } | { canInstall: boolean; method: string }>>;
     install: () => Promise<OperationResult<{ message: string; expectedPath: string }>>;
   };
@@ -134,6 +137,8 @@ const electronAPI: ElectronAPI = {
       ipcRenderer.invoke('openssl:extractPublicKey', certPath, outputPath),
     generateCSR: (options) => ipcRenderer.invoke('openssl:generateCSR', options),
     generateSelfSigned: (options) => ipcRenderer.invoke('openssl:generateSelfSigned', options),
+    inspectCSR: (filePath) => ipcRenderer.invoke('openssl:inspectCSR', filePath),
+    findInDirectory: (dirPath) => ipcRenderer.invoke('openssl:findInDirectory', dirPath),
     detect: () => ipcRenderer.invoke('openssl:detect'),
     install: () => ipcRenderer.invoke('openssl:install'),
   },

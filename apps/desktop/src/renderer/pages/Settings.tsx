@@ -12,7 +12,7 @@ import {
   Divider,
   Grid,
 } from '@mui/material';
-import { Folder as FolderIcon, CheckCircle as CheckIcon } from '@mui/icons-material';
+import { Folder as FolderIcon, CheckCircle as CheckIcon, Search as SearchIcon } from '@mui/icons-material';
 import { useSettingsStore } from '../store/settingsStore';
 
 export default function Settings() {
@@ -50,6 +50,35 @@ export default function Settings() {
     }
   };
 
+  const handleSelectOpenSSLFolder = async () => {
+    const dirResult = await window.electronAPI.dialog.selectDirectory();
+    if (!dirResult.success || !dirResult.data) return;
+    setOpensslResult(null);
+    setOpensslLoading(true);
+    try {
+      const findResult = await window.electronAPI.openssl.findInDirectory(dirResult.data);
+      if (findResult.success && findResult.data) {
+        setOpensslPath(findResult.data);
+        setOpensslResult({
+          success: true,
+          message: `Ejecutable encontrado: ${findResult.data}`,
+        });
+      } else {
+        setOpensslResult({
+          success: false,
+          message: findResult.error?.message || 'No se encontró openssl.exe en la carpeta seleccionada.',
+        });
+      }
+    } catch (err: unknown) {
+      setOpensslResult({
+        success: false,
+        message: `Error al buscar OpenSSL: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    } finally {
+      setOpensslLoading(false);
+    }
+  };
+
   const handleTestOpenSSL = async () => {
     if (!opensslPath) return;
     setOpensslLoading(true);
@@ -60,7 +89,14 @@ export default function Settings() {
         success: result.success,
         message: result.success
           ? `OpenSSL detectado: ${result.data}`
-          : result.error?.message || 'Error al probar OpenSSL',
+          : result.error?.technicalDetails
+            ? `${result.error.message}\n\nDetalles: ${result.error.technicalDetails}`
+            : result.error?.message || 'Error al probar OpenSSL',
+      });
+    } catch (err: unknown) {
+      setOpensslResult({
+        success: false,
+        message: `Error al probar OpenSSL: ${err instanceof Error ? err.message : String(err)}`,
       });
     } finally {
       setOpensslLoading(false);
@@ -112,7 +148,7 @@ export default function Settings() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
+      <Typography variant="h4" gutterBottom data-testid="page-title">
         Configuración
       </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mb: 3 }}>
@@ -122,7 +158,7 @@ export default function Settings() {
       <Paper sx={{ p: 3, mb: 3 }}>
         <Typography variant="h6" gutterBottom>OpenSSL</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Ruta al ejecutable de OpenSSL
+          Ruta al ejecutable de OpenSSL. Puedes seleccionar el archivo directamente o una carpeta y la aplicación buscará el ejecutable automáticamente.
         </Typography>
 
         <Grid container spacing={2} alignItems="center">
@@ -133,10 +169,14 @@ export default function Settings() {
                 size="small"
                 value={opensslPath}
                 onChange={(e) => setOpensslPath(e.target.value)}
-                placeholder="C:\Program Files\OpenSSL\bin\openssl.exe"
+                placeholder="C:\Program Files\OpenSSL-Win64\bin\openssl.exe"
+                data-testid="openssl-path-input"
               />
-              <Button variant="outlined" size="small" onClick={handleSelectOpenSSL}>
+              <Button variant="outlined" size="small" onClick={handleSelectOpenSSL} title="Seleccionar archivo">
                 <FolderIcon />
+              </Button>
+              <Button variant="outlined" size="small" onClick={handleSelectOpenSSLFolder} title="Buscar en carpeta">
+                <SearchIcon />
               </Button>
             </Box>
           </Grid>
@@ -146,6 +186,7 @@ export default function Settings() {
               onClick={handleTestOpenSSL}
               disabled={opensslLoading || !opensslPath}
               startIcon={opensslLoading ? <CircularProgress size={16} /> : null}
+              data-testid="openssl-test-btn"
             >
               Probar
             </Button>
@@ -154,7 +195,9 @@ export default function Settings() {
 
         {opensslResult && (
           <Alert severity={opensslResult.success ? 'success' : 'error'} sx={{ mt: 2 }}>
-            {opensslResult.message}
+            <Box sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+              {opensslResult.message}
+            </Box>
           </Alert>
         )}
       </Paper>
@@ -240,7 +283,7 @@ export default function Settings() {
       <Divider sx={{ my: 3 }} />
 
       <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
-        <Button variant="contained" size="large" onClick={handleSave}>
+        <Button variant="contained" size="large" onClick={handleSave} data-testid="save-settings-btn">
           Guardar cambios
         </Button>
         {saved && (

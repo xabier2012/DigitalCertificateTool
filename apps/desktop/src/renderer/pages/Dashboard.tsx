@@ -13,12 +13,15 @@ import {
   ListItemText,
   Paper,
   Chip,
+  Button,
+  Tooltip,
 } from '@mui/material';
 import {
   Search as SearchIcon,
   SwapHoriz as ConvertIcon,
   Add as AddIcon,
   InsertDriveFile as FileIcon,
+  DeleteSweep as ClearIcon,
 } from '@mui/icons-material';
 import { useSettingsStore } from '../store/settingsStore';
 
@@ -48,7 +51,7 @@ const quickActions = [
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { settings } = useSettingsStore();
+  const { settings, updateSettings } = useSettingsStore();
   const recentFiles = settings?.recentFiles || [];
 
   const formatDate = (dateString: string) => {
@@ -78,7 +81,7 @@ export default function Dashboard() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>
+      <Typography variant="h4" gutterBottom data-testid="page-title">
         Dashboard
       </Typography>
       <Typography variant="body1" color="text.secondary" sx={{ mb: 4 }}>
@@ -94,6 +97,7 @@ export default function Dashboard() {
           <Grid item xs={12} md={4} key={action.title}>
             <Card sx={{ height: '100%' }}>
               <CardActionArea
+                data-testid={`quick-action-${action.path.split('/').pop()}`}
                 onClick={() => navigate(action.path)}
                 sx={{ height: '100%' }}
               >
@@ -112,9 +116,25 @@ export default function Dashboard() {
         ))}
       </Grid>
 
-      <Typography variant="h6" gutterBottom>
-        Archivos recientes
-      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+        <Typography variant="h6">
+          Archivos recientes
+        </Typography>
+        {recentFiles.length > 0 && (
+          <Tooltip title="Limpiar archivos recientes">
+            <Button
+              size="small"
+              color="error"
+              startIcon={<ClearIcon />}
+              onClick={async () => {
+                await updateSettings({ recentFiles: [] });
+              }}
+            >
+              Limpiar
+            </Button>
+          </Tooltip>
+        )}
+      </Box>
 
       <Paper sx={{ p: 0 }}>
         {recentFiles.length === 0 ? (

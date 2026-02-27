@@ -9,6 +9,7 @@ import InspectCertificate from './pages/certificates/InspectCertificate';
 import ConvertCertificate from './pages/certificates/ConvertCertificate';
 import GenerateCertificate from './pages/certificates/GenerateCertificate';
 import PKCS12Manager from './pages/certificates/PKCS12Manager';
+import PKCS7Manager from './pages/certificates/PKCS7Manager';
 import CAManager from './pages/certificates/CAManager';
 import Templates from './pages/Templates';
 import KeystoreOpen from './pages/keystores/KeystoreOpen';
@@ -53,6 +54,7 @@ function App() {
         <Route path="/certificates/inspect" element={<InspectCertificate />} />
         <Route path="/certificates/convert" element={<ConvertCertificate />} />
         <Route path="/certificates/pkcs12" element={<PKCS12Manager />} />
+        <Route path="/certificates/pkcs7" element={<PKCS7Manager />} />
         <Route path="/ca-manager" element={<CAManager />} />
         <Route path="/templates" element={<Templates />} />
         <Route path="/keystores/open" element={<KeystoreOpen />} />
