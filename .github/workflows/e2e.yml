@@ -25,6 +25,11 @@ jobs:
       - name: Build for E2E
         run: npm run build:e2e
 
+      - name: Fix Electron sandbox permissions
+        run: |
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+
       - name: Run E2E tests
         run: xvfb-run --auto-servernum npx playwright test
         env:
